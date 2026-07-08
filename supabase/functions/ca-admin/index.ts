@@ -158,6 +158,11 @@ Deno.serve(async (req) => {
         return json({ ok: true, status: res.status })
       }
 
+      case 'conta-conectada': {
+        const payload = await caGet(accessToken, '/v1/pessoas/conta-conectada')
+        return json({ ok: true, payload })
+      }
+
       case 'pessoas': {
         const termo = url.searchParams.get('q') ?? ''
         const payload = await caGet(

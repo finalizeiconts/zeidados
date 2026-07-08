@@ -72,6 +72,23 @@ function buildPessoa(c: CsCliente) {
   return payload
 }
 
+/** SHA-256 hex de um objeto com chaves ordenadas (hash estável). */
+async function stableHash(obj: Record<string, unknown>): Promise<string> {
+  const sorted = JSON.stringify(obj, Object.keys(obj).sort())
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sorted))
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/** Campos mutáveis enviados no PATCH (docs/tipo ficam fora — imutáveis na prática). */
+function buildPatch(c: CsCliente): Record<string, unknown> {
+  const full = buildPessoa(c)
+  const patch: Record<string, unknown> = {}
+  for (const k of ['nome', 'codigo', 'email', 'telefone_comercial', 'nome_fantasia', 'enderecos']) {
+    if (full[k] !== undefined) patch[k] = full[k]
+  }
+  return patch
+}
+
 async function caFetch(
   accessToken: string,
   path: string,
@@ -210,28 +227,58 @@ Deno.serve(async (req) => {
     }
 
     // Clientes do CRM ainda não mapeados.
-    const { data: clientes, error: cliErr } = await supabasePublic
+    const { data: clientesRaw, error: cliErr } = await supabasePublic
       .from('cs_clientes')
       .select('id, nome, codigo, cnpj_cpf, email, telefone, nome_fantasia, cidade, estado, endereco, status')
       .eq('status', statusFiltro)
       .order('nome')
     if (cliErr) throw cliErr
 
+    // A própria empresa (conta conectada) não é cliente de si mesma no ERP —
+    // o Conta Azul rejeita o CNPJ dela. Fica fora da sincronização.
+    const own = await caFetch(accessToken, '/v1/pessoas/conta-conectada')
+    const ownDoc = onlyDigits(
+      String((own.body as Record<string, unknown>)?.documento ?? ''),
+    )
+    const clientes = (clientesRaw as CsCliente[]).filter(
+      (c) => !ownDoc || onlyDigits(c.cnpj_cpf) !== ownDoc,
+    )
+
     const { data: mapeados } = await supabase
       .from('ca_pessoa_map')
-      .select('cs_cliente_id')
-    const jaMapeados = new Set((mapeados ?? []).map((m) => m.cs_cliente_id))
+      .select('cs_cliente_id, ca_pessoa_id, payload_hash, origem')
+    const mapa = new Map(
+      (mapeados ?? []).map((m) => [
+        m.cs_cliente_id as string,
+        {
+          caId: m.ca_pessoa_id as string,
+          hash: m.payload_hash as string | null,
+          origem: m.origem as string,
+        },
+      ]),
+    )
 
-    const pendentes = (clientes as CsCliente[]).filter((c) => !jaMapeados.has(c.id))
+    const pendentes = clientes.filter((c) => !mapa.has(c.id))
     const lote = pendentes.slice(0, limit)
+
+    // Já mapeados cujo cadastro mudou no CRM (hash divergente).
+    const desatualizados: Array<{ c: CsCliente; caId: string; hash: string }> = []
+    for (const c of clientes) {
+      const m = mapa.get(c.id)
+      if (!m) continue
+      const hash = await stableHash(buildPessoa(c))
+      if (m.hash !== hash) desatualizados.push({ c, caId: m.caId, hash })
+    }
+    const loteUpdate = desatualizados.slice(0, limit)
 
     if (dry) {
       return json({
         ok: true,
         dry_run: true,
         crm_total: clientes?.length ?? 0,
-        ja_mapeados: jaMapeados.size,
+        ja_mapeados: mapa.size,
         pendentes: pendentes.length,
+        para_atualizar: desatualizados.length,
         neste_lote: lote.length,
         plano: lote.map((c) => ({
           nome: c.nome,
@@ -239,16 +286,20 @@ Deno.serve(async (req) => {
           tipo: onlyDigits(c.cnpj_cpf).length === 11 ? 'Física' : 'Jurídica',
           email: c.email ?? '(sem email)',
         })),
+        plano_atualizacao: loteUpdate.map((u) => u.c.nome),
       })
     }
 
     let criados = 0
     let mapeadosAgora = 0
+    let atualizados = 0
     let pulados = 0
     const detalhes: Array<Record<string, unknown>> = []
 
     for (const c of lote) {
       const doc = onlyDigits(c.cnpj_cpf)
+      const payload = buildPessoa(c)
+      const hash = await stableHash(payload)
 
       // 1) Já existe no Conta Azul? Só mapeia.
       const existente = doc ? await findByDoc(accessToken, doc) : null
@@ -257,6 +308,7 @@ Deno.serve(async (req) => {
           cs_cliente_id: c.id,
           ca_pessoa_id: existente,
           nome: c.nome,
+          payload_hash: hash,
         })
         mapeadosAgora++
         detalhes.push({ nome: c.nome, acao: 'mapeado (já existia)', ca_id: existente })
@@ -266,7 +318,7 @@ Deno.serve(async (req) => {
       // 2) Cria a Pessoa.
       const { status, body } = await caFetch(accessToken, '/v1/pessoas', {
         method: 'POST',
-        body: JSON.stringify(buildPessoa(c)),
+        body: JSON.stringify(payload),
       })
       if (status === 200 || status === 201) {
         const caId = String((body as Record<string, unknown>)?.id ?? '')
@@ -275,6 +327,7 @@ Deno.serve(async (req) => {
             cs_cliente_id: c.id,
             ca_pessoa_id: caId,
             nome: c.nome,
+            payload_hash: hash,
           })
         }
         criados++
@@ -292,19 +345,47 @@ Deno.serve(async (req) => {
       await new Promise((r) => setTimeout(r, 150))
     }
 
+    // 3) Propaga alterações do CRM (ZeiClient = fonte da verdade; sobrescreve
+    //    edições feitas direto no Conta Azul).
+    for (const { c, caId, hash } of loteUpdate) {
+      const { status, body } = await caFetch(accessToken, `/v1/pessoas/${caId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(buildPatch(c)),
+      })
+      if (status >= 200 && status < 300) {
+        await supabase
+          .from('ca_pessoa_map')
+          .update({ payload_hash: hash, nome: c.nome, synced_at: new Date().toISOString() })
+          .eq('cs_cliente_id', c.id)
+        atualizados++
+        detalhes.push({ nome: c.nome, acao: 'atualizado', ca_id: caId })
+      } else {
+        pulados++
+        detalhes.push({
+          nome: c.nome,
+          acao: 'ERRO no PATCH',
+          status,
+          erro: JSON.stringify(body).slice(0, 200),
+        })
+      }
+      await new Promise((r) => setTimeout(r, 150))
+    }
+
     await finish({
       finished_at: new Date().toISOString(),
       ok: true,
       criados,
       mapeados: mapeadosAgora,
+      atualizados,
       pulados,
-      message: `lote de ${lote.length}; restam ${pendentes.length - lote.length}`,
+      message: `lote ${lote.length} novos + ${loteUpdate.length} alterados; restam ${pendentes.length - lote.length} novos`,
     })
 
     return json({
       ok: true,
       criados,
       mapeados: mapeadosAgora,
+      atualizados,
       erros: pulados,
       restantes: pendentes.length - lote.length,
       detalhes,
