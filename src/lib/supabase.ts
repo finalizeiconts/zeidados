@@ -7,10 +7,20 @@ import type { FinancialEvent } from './types'
  * `.env` com as credenciais do projeto para ligar os dados reais.
  */
 
-const url = import.meta.env.VITE_SUPABASE_URL as string | undefined
-const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
+// Configuração pública do projeto (Zei Client). A anon key é PÚBLICA por
+// design (sempre embarca no bundle); a segurança vem do RLS + login. Embutir
+// aqui elimina a dependência de variáveis de ambiente no build (Hostinger).
+const FALLBACK_URL = 'https://ehrdmbbqvkxejgtkpbjb.supabase.co'
+const FALLBACK_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVocmRtYmJxdmt4ZWpndGtwYmpiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4MzMyMjksImV4cCI6MjA5MTQwOTIyOX0.TbVqlKMJcz_odToYM_Wr_UrGLCrscHtuR0XfClPp39k'
 
-export const isSupabaseConfigured = Boolean(url && anonKey)
+const url = (import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? FALLBACK_URL
+const anonKey =
+  (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) ?? FALLBACK_ANON_KEY
+
+/** Modo demonstração só quando pedido explicitamente (VITE_DEMO=1). */
+export const isSupabaseConfigured =
+  import.meta.env.VITE_DEMO !== '1' && Boolean(url && anonKey)
 
 /**
  * Os dados do painel vivem no schema `contaazul` (isolado do resto do projeto

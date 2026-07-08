@@ -5,7 +5,9 @@ import { PlugZap } from 'lucide-react'
  * OAuth do Conta Azul. A URL vem de VITE_CA_CONNECT_URL (função ca-auth-start).
  */
 export function ConnectBanner() {
-  const connectUrl = import.meta.env.VITE_CA_CONNECT_URL
+  const connectUrl =
+    import.meta.env.VITE_CA_CONNECT_URL ??
+    'https://ehrdmbbqvkxejgtkpbjb.supabase.co/functions/v1/ca-auth-start'
 
   return (
     <div className="mb-9 flex flex-col items-start gap-4 rounded-2xl border border-border bg-card p-6 sm:flex-row sm:items-center sm:justify-between">
