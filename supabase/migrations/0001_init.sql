@@ -83,13 +83,44 @@ alter table contaazul.ca_sync_log         enable row level security;
 -- ca_tokens e ca_sync_log: SEM policies → só o service_role (Edge Functions)
 -- consegue ler/escrever. Nunca exponha tokens ao cliente.
 
--- ca_financial_events: leitura para usuários autenticados (Supabase Auth).
+-- ── Lista de permissão ──────────────────────────────────────────────────────
+-- O projeto Supabase é compartilhado com o app Zei Client (outros usuários no
+-- Auth), então a leitura do financeiro é restrita a e-mails autorizados.
+create table if not exists contaazul.ca_allowed_users (
+  email text primary key,
+  added_at timestamptz not null default now()
+);
+alter table contaazul.ca_allowed_users enable row level security;
+-- sem policies: só o service_role administra a lista
+
+insert into contaazul.ca_allowed_users (email) values
+  ('werbethy17@gmail.com'),
+  ('gestao@finalizeicontabilidade.com')
+on conflict (email) do nothing;
+
+-- Função SECURITY DEFINER: o usuário logado está na lista?
+create or replace function contaazul.is_allowed()
+returns boolean
+language sql stable security definer
+set search_path = ''
+as $fn$
+  select exists (
+    select 1 from contaazul.ca_allowed_users a
+    where a.email = (select auth.jwt() ->> 'email')
+  );
+$fn$;
+
+revoke all on function contaazul.is_allowed() from public;
+grant execute on function contaazul.is_allowed() to authenticated;
+
+-- ca_financial_events: leitura só para usuários autenticados E autorizados.
 drop policy if exists "events_select_authenticated" on contaazul.ca_financial_events;
-create policy "events_select_authenticated"
+drop policy if exists "events_select_allowed" on contaazul.ca_financial_events;
+create policy "events_select_allowed"
   on contaazul.ca_financial_events
   for select
   to authenticated
-  using (true);
+  using (contaazul.is_allowed());
 
 -- OPCIONAL (deploy interno rápido, sem tela de login): libere leitura anônima.
 -- ⚠️  Isso torna os dados financeiros legíveis por qualquer um com a anon key.
