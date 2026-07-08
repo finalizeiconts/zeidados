@@ -34,7 +34,30 @@ Deno.serve(async (req) => {
   const state = url.searchParams.get('state')
   const cookieState = parseCookie(req.headers.get('cookie'), 'ca_oauth_state')
 
-  const appRedirect = Deno.env.get('APP_REDIRECT_URL') ?? '/'
+  // Destino pós-conexão: vem dentro do state (ver ca-auth-start), com
+  // allowlist de domínios; senão, APP_REDIRECT_URL.
+  const REDIRECT_ALLOWLIST = [
+    'zeidados.finalizeicontabilidade.com.br',
+    'zeiclient.finalizeicontabilidade.com.br',
+    'localhost',
+  ]
+  let appRedirect = Deno.env.get('APP_REDIRECT_URL') ?? '/'
+  try {
+    const decoded = JSON.parse(
+      atob((state ?? '').replaceAll('-', '+').replaceAll('_', '/')),
+    ) as { r?: string }
+    if (decoded.r) {
+      const u = new URL(decoded.r)
+      if (
+        (u.protocol === 'https:' || u.hostname === 'localhost') &&
+        REDIRECT_ALLOWLIST.includes(u.hostname)
+      ) {
+        appRedirect = decoded.r
+      }
+    }
+  } catch {
+    /* state antigo/ilegível: mantém o padrão */
+  }
 
   if (!code) {
     return redirect(`${appRedirect}?ca=erro&motivo=sem_code`)

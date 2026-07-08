@@ -139,14 +139,36 @@ Deno.serve(async (req) => {
   const auth = req.headers.get('Authorization') ?? ''
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
   const syncSecret = Deno.env.get('SYNC_SECRET')
-  const authorized =
+  let authorized =
     auth === `Bearer ${serviceKey}` ||
     (!!syncSecret && url.searchParams.get('secret') === syncSecret)
+
+  // Também aceita usuário LOGADO do app (botão "Sincronizar" no ZeiClient).
+  // Operação idempotente e não destrutiva; o app é interno (staff).
+  if (!authorized && auth.startsWith('Bearer ')) {
+    const { data } = await supabase.auth.getUser(auth.slice(7))
+    authorized = Boolean(data?.user)
+  }
   if (!authorized) return json({ error: 'não autorizado' }, 401)
 
-  const dry = url.searchParams.get('dry') === '1'
-  const limit = Math.min(200, Number(url.searchParams.get('limit') ?? 50))
-  const statusFiltro = url.searchParams.get('status') ?? 'ativo'
+  // Parâmetros via query string (cron/curl) ou corpo JSON (functions.invoke).
+  let bodyParams: Record<string, unknown> = {}
+  if (req.method === 'POST') {
+    try {
+      bodyParams = (await req.json()) as Record<string, unknown>
+    } catch {
+      /* sem corpo */
+    }
+  }
+  const dry =
+    url.searchParams.get('dry') === '1' || bodyParams.dry === true || bodyParams.dry === 1
+  const limit = Math.min(
+    200,
+    Number(bodyParams.limit ?? url.searchParams.get('limit') ?? 50),
+  )
+  const statusFiltro = String(
+    bodyParams.status ?? url.searchParams.get('status') ?? 'ativo',
+  )
 
   const { data: logRow } = dry
     ? { data: null }
