@@ -1,4 +1,4 @@
-import { Moon, Sun } from 'lucide-react'
+import { LogOut, Moon, Sun } from 'lucide-react'
 import type { Theme } from '@/hooks/useTheme'
 import type { SyncState } from '@/lib/types'
 import { LiveDot } from '@/components/ui/LiveDot'
@@ -9,9 +9,10 @@ interface TopbarProps {
   theme: Theme
   onToggleTheme: () => void
   sync: SyncState
+  onSignOut?: () => void
 }
 
-export function Topbar({ eyebrow, title, theme, onToggleTheme, sync }: TopbarProps) {
+export function Topbar({ eyebrow, title, theme, onToggleTheme, sync, onSignOut }: TopbarProps) {
   return (
     <div
       className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-border px-6"
@@ -47,6 +48,16 @@ export function Topbar({ eyebrow, title, theme, onToggleTheme, sync }: TopbarPro
             <Moon size={17} strokeWidth={1.75} />
           )}
         </button>
+        {onSignOut && (
+          <button
+            onClick={onSignOut}
+            aria-label="Sair"
+            title="Sair"
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-card text-muted-fg transition-colors hover:bg-muted hover:text-fg"
+          >
+            <LogOut size={16} strokeWidth={1.75} />
+          </button>
+        )}
       </div>
     </div>
   )
