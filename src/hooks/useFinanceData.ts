@@ -67,7 +67,7 @@ export function useFinanceData(): UseFinanceData {
       .channel('ca_financial_events_stream')
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'ca_financial_events' },
+        { event: '*', schema: 'contaazul', table: 'ca_financial_events' },
         (payload) => {
           if (!active) return
           const row = payload.new as FinancialEventRow

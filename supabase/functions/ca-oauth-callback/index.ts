@@ -54,6 +54,7 @@ Deno.serve(async (req) => {
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+      { db: { schema: 'contaazul' } },
     )
 
     const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString()

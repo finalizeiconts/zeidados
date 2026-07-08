@@ -9,7 +9,7 @@
 --   2) fazer deploy das Edge Functions
 --   3) definir os secrets (ver supabase/set-secrets.example.sh)
 --
--- Substitua <PROJECT_REF> e <SERVICE_ROLE_KEY> pelos valores do seu projeto.
+-- Projeto: Zei Client (ehrdmbbqvkxejgtkpbjb). Substitua <SERVICE_ROLE_KEY>.
 -- ============================================================================
 
 create extension if not exists pg_cron;
@@ -25,7 +25,7 @@ select cron.schedule(
   '*/2 * * * *',
   $$
   select net.http_post(
-    url     := 'https://<PROJECT_REF>.supabase.co/functions/v1/ca-sync',
+    url     := 'https://ehrdmbbqvkxejgtkpbjb.supabase.co/functions/v1/ca-sync',
     headers := jsonb_build_object(
       'Content-Type',  'application/json',
       'Authorization', 'Bearer <SERVICE_ROLE_KEY>'

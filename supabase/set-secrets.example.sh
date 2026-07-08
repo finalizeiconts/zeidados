@@ -13,13 +13,12 @@ set -euo pipefail
 CONTA_AZUL_CLIENT_ID="SEU_CLIENT_ID"
 CONTA_AZUL_CLIENT_SECRET="SEU_CLIENT_SECRET"
 
-# URL pública da função de callback (após o deploy):
-#   https://<PROJECT_REF>.supabase.co/functions/v1/ca-oauth-callback
+# URL pública da função de callback (projeto Zei Client).
 # Cadastre exatamente esta URL como "Redirect URI" no App do Conta Azul.
-CONTA_AZUL_REDIRECT_URI="https://<PROJECT_REF>.supabase.co/functions/v1/ca-oauth-callback"
+CONTA_AZUL_REDIRECT_URI="https://ehrdmbbqvkxejgtkpbjb.supabase.co/functions/v1/ca-oauth-callback"
 
-# Para onde voltar no app depois de conectar (a URL do seu front):
-APP_REDIRECT_URL="https://seu-painel.vercel.app"
+# Para onde voltar no app depois de conectar (o front na Hostinger):
+APP_REDIRECT_URL="https://zeidados.finalizeicontabilidade.com.br"
 
 # Segredo simples opcional para chamar o ca-sync manualmente via ?secret=...
 SYNC_SECRET="$(openssl rand -hex 16)"

@@ -77,13 +77,20 @@ conta de testes e dados fictícios por 30 dias). Anote o `client_id` e o
 
 ### 2. Provisione o Supabase
 
+> Este projeto usa o Supabase **Zei Client** (`ehrdmbbqvkxejgtkpbjb`). Todos os
+> objetos ficam **isolados no schema `contaazul`** — nada do schema `public`
+> (dados existentes do Zei Client) é alterado.
+
 ```bash
-supabase link --project-ref <PROJECT_REF>
+supabase link --project-ref ehrdmbbqvkxejgtkpbjb
 supabase db push                       # aplica supabase/migrations/0001_init.sql
 supabase functions deploy ca-auth-start     --no-verify-jwt
 supabase functions deploy ca-oauth-callback --no-verify-jwt
 supabase functions deploy ca-sync           --no-verify-jwt
 ```
+
+Depois da migration, **exponha o schema** para a API: Dashboard →
+*Project Settings → Data API → Exposed schemas* → adicione `contaazul`.
 
 ### 3. Defina os secrets (lado servidor)
 
@@ -120,11 +127,12 @@ dados), autorize no Conta Azul e pronto — o painel passa a sincronizar sozinho
 
 ---
 
-## Deploy do front (Vercel)
+## Deploy do front (Hostinger)
 
-Projeto Vite padrão: build `npm run build`, saída `dist/`. Configure as
-variáveis `VITE_*` no painel da Vercel e ajuste `APP_REDIRECT_URL` (secret do
-Supabase) para a URL final do front.
+O front vai para **https://zeidados.finalizeicontabilidade.com.br** (Hostinger).
+É um site estático: rode `npm run build` com o `.env` preenchido e suba o
+conteúdo da pasta `dist/` para o diretório do subdomínio (via hPanel/FTP).
+O secret `APP_REDIRECT_URL` do Supabase já aponta para essa URL.
 
 ---
 

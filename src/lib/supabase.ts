@@ -1,4 +1,4 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { createClient } from '@supabase/supabase-js'
 import type { FinancialEvent } from './types'
 
 /**
@@ -12,8 +12,13 @@ const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
 
 export const isSupabaseConfigured = Boolean(url && anonKey)
 
-export const supabase: SupabaseClient | null = isSupabaseConfigured
+/**
+ * Os dados do painel vivem no schema `contaazul` (isolado do resto do projeto
+ * Zei Client). Lembre de expor esse schema em Project Settings → Data API.
+ */
+export const supabase = isSupabaseConfigured
   ? createClient(url as string, anonKey as string, {
+      db: { schema: 'contaazul' },
       auth: { persistSession: true, autoRefreshToken: true },
     })
   : null
