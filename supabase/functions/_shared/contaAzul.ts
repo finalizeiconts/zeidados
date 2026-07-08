@@ -114,29 +114,33 @@ function pick(obj: Record<string, unknown>, keys: string[]): unknown {
   return undefined
 }
 
+/** Nome legível de um valor que pode ser string, objeto ou array de objetos. */
+function toName(v: unknown): string {
+  if (v == null) return ''
+  if (typeof v === 'string') return v
+  if (Array.isArray(v)) return toName(v[0])
+  if (typeof v === 'object') {
+    const o = v as Record<string, unknown>
+    return toName(
+      pick(o, ['nome', 'razao_social', 'nome_fantasia', 'descricao', 'name']) ?? '',
+    )
+  }
+  return String(v)
+}
+
 function toIsoDate(v: unknown): string | null {
   if (typeof v !== 'string' || !v) return null
   // aceita "2026-07-08" ou "2026-07-08T00:00:00Z"
   return v.slice(0, 10)
 }
 
-function normalizeStatus(
-  rawStatus: unknown,
-  dueDate: string,
-  settled: string | null,
-): 'pago' | 'pendente' | 'vencido' {
-  const s = String(rawStatus ?? '').toUpperCase()
-  if (settled || /PAGO|RECEBIDO|LIQUIDAD|QUITAD|SETTLED|PAID/.test(s)) return 'pago'
-  // sem liquidação: vencido se passou do vencimento
-  const today = new Date().toISOString().slice(0, 10)
-  if (dueDate && dueDate < today) return 'vencido'
-  return 'pendente'
-}
-
 /**
- * Mapeia um item cru da API para o nosso modelo. Tolerante a variações de nome
- * de campo — a API v2 pode usar rótulos diferentes; registramos o `raw` para
- * conferência. Ajuste os nomes aqui após inspecionar a resposta real.
+ * Mapeia um item cru da API v2 para o nosso modelo.
+ *
+ * Formato observado (contas-a-pagar/receber "buscar"): { id, descricao, total,
+ * pago, nao_pago, status, status_traduzido, data_vencimento, data_competencia,
+ * data_criacao, data_alteracao, fornecedor|cliente: {nome}, categorias: [{...}],
+ * centros_de_custo: [...] }. `raw` guarda o payload para auditoria.
  */
 export function normalizeEvent(kind: CaKind, item: Record<string, unknown>): NormalizedEvent {
   const id = String(
@@ -144,32 +148,46 @@ export function normalizeEvent(kind: CaKind, item: Record<string, unknown>): Nor
       crypto.randomUUID(),
   )
   const amount = Number(
-    pick(item, ['valor', 'valor_total', 'total', 'amount', 'valor_parcela']) ?? 0,
+    pick(item, ['total', 'valor', 'valor_total', 'amount', 'valor_parcela']) ?? 0,
   )
   const due = toIsoDate(
     pick(item, ['data_vencimento', 'vencimento', 'dataVencimento', 'due_date']),
   )
-  const settled = toIsoDate(
-    pick(item, ['data_pagamento', 'data_liquidacao', 'data_recebimento', 'settled_date']),
-  )
   const dueDate = due ?? new Date().toISOString().slice(0, 10)
-  const counterparty = String(
-    pick(item, [
-      'nome_cliente',
-      'cliente',
-      'nome_fornecedor',
-      'fornecedor',
-      'nome',
-      'pessoa',
-    ]) ?? '',
+
+  const counterparty = toName(
+    pick(item, ['cliente', 'fornecedor', 'nome_cliente', 'nome_fornecedor', 'pessoa']),
   )
-  const category = String(
-    pick(item, ['categoria', 'nome_categoria', 'category']) ??
-      (kind === 'receita' ? 'Receitas' : 'Despesas'),
-  )
+  const category =
+    toName(pick(item, ['categorias', 'categoria', 'nome_categoria'])) ||
+    (kind === 'receita' ? 'Receitas' : 'Despesas')
   const description = String(
     pick(item, ['descricao', 'description', 'observacao', 'historico']) ?? category,
   )
+
+  // Situação: a API traz status (ex.: PAGO/EM_ABERTO/ATRASADO) e os valores
+  // pago/nao_pago — consideramos quitado quando nada resta em aberto.
+  const statusRaw = String(pick(item, ['status', 'situacao']) ?? '').toUpperCase()
+  const pagoValor = Number(pick(item, ['pago']) ?? 0)
+  const naoPago = Number(pick(item, ['nao_pago']) ?? NaN)
+  const isPaid =
+    /PAGO|RECEBIDO|LIQUIDAD|QUITAD|CONCILIAD|SETTLED|PAID/.test(statusRaw) ||
+    (Number.isFinite(naoPago) && naoPago <= 0 && pagoValor > 0)
+
+  // A listagem não expõe a data de liquidação; usamos a melhor aproximação
+  // disponível (data de pagamento se vier; senão o vencimento).
+  const settled = isPaid
+    ? (toIsoDate(
+        pick(item, ['data_pagamento', 'data_liquidacao', 'data_recebimento']),
+      ) ?? dueDate)
+    : null
+
+  const today = new Date().toISOString().slice(0, 10)
+  const status: 'pago' | 'pendente' | 'vencido' = isPaid
+    ? 'pago'
+    : dueDate < today
+      ? 'vencido'
+      : 'pendente'
 
   return {
     id,
@@ -180,7 +198,7 @@ export function normalizeEvent(kind: CaKind, item: Record<string, unknown>): Nor
     amount: Number.isFinite(amount) ? Math.abs(amount) : 0,
     due_date: dueDate,
     settled_date: settled,
-    status: normalizeStatus(pick(item, ['status', 'situacao']), dueDate, settled),
+    status,
     raw: item,
   }
 }
