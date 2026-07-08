@@ -17,6 +17,7 @@ import { corsHeaders, json } from '../_shared/cors.ts'
 interface CsCliente {
   id: string
   nome: string
+  codigo: string | null
   cnpj_cpf: string | null
   email: string | null
   telefone: string | null
@@ -44,6 +45,8 @@ function buildPessoa(c: CsCliente) {
     perfis: [{ tipo_perfil: 'Cliente' }],
     ativo: true,
   }
+  // "Código do cliente" no Conta Azul = código do ZeiClient (quem é quem).
+  if (c.codigo) payload.codigo = c.codigo
   if (isCpf) payload.cpf = doc
   if (isCnpj) payload.cnpj = doc
   // Campo pode vir com múltiplos e-mails separados por vírgula/;: usa o 1º.
@@ -187,7 +190,7 @@ Deno.serve(async (req) => {
     // Clientes do CRM ainda não mapeados.
     const { data: clientes, error: cliErr } = await supabasePublic
       .from('cs_clientes')
-      .select('id, nome, cnpj_cpf, email, telefone, nome_fantasia, cidade, estado, endereco, status')
+      .select('id, nome, codigo, cnpj_cpf, email, telefone, nome_fantasia, cidade, estado, endereco, status')
       .eq('status', statusFiltro)
       .order('nome')
     if (cliErr) throw cliErr

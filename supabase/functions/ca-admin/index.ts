@@ -139,6 +139,25 @@ Deno.serve(async (req) => {
         return json({ ok: true, itens: extractItems(payload) })
       }
 
+      case 'pessoa-codigo': {
+        // Define o "Código do cliente" de uma Pessoa existente.
+        const id = url.searchParams.get('id') ?? ''
+        const codigo = url.searchParams.get('codigo') ?? ''
+        if (!id || !codigo) return json({ error: 'informe ?id=UUID&codigo=XXXX' }, 400)
+        const res = await fetch(`${CA_API_BASE}/v1/pessoas/${id}`, {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify({ codigo }),
+        })
+        const text = await res.text()
+        if (!res.ok) throw new Error(`PATCH pessoa -> ${res.status}: ${text.slice(0, 300)}`)
+        return json({ ok: true, status: res.status })
+      }
+
       case 'pessoas': {
         const termo = url.searchParams.get('q') ?? ''
         const payload = await caGet(
