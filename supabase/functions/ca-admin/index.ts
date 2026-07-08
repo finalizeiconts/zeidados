@@ -139,6 +139,15 @@ Deno.serve(async (req) => {
         return json({ ok: true, itens: extractItems(payload) })
       }
 
+      case 'pessoas': {
+        const termo = url.searchParams.get('q') ?? ''
+        const payload = await caGet(
+          accessToken,
+          `/v1/pessoas?pagina=1&tamanho_pagina=20&termo_busca=${encodeURIComponent(termo)}`,
+        )
+        return json({ ok: true, itens: extractItems(payload) })
+      }
+
       case 'debug-contas': {
         // Resposta crua da 1ª página, para diagnóstico de shape/filtros.
         const payload = await caGet(
@@ -191,7 +200,7 @@ Deno.serve(async (req) => {
                 data_vencimento: hoje,
                 nota: 'teste de integração',
                 conta_financeira: conta,
-                detalhe_valor: { valor_bruto: 0.01 },
+                detalhe_valor: { valor_bruto: 0.01, valor_liquido: 0.01 },
                 metodo_pagamento: 'OUTRO',
               },
             ],
