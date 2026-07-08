@@ -1,0 +1,182 @@
+@import 'tailwindcss';
+
+/* ============================================================================
+   Finalizei — design tokens (OKLCH, monocromático + amarelo de marca)
+   Espelha o base_sistema_finalizei; troca de tema via data-theme no <html>.
+   ========================================================================== */
+
+:root {
+  --font: 'Manrope', system-ui, sans-serif;
+  --serif: 'Instrument Serif', Georgia, serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* ── claro (default) ──────────────────────────────────────────────────── */
+:root,
+:root[data-theme='light'] {
+  --bg: oklch(0.985 0 0);
+  --fg: oklch(0.18 0 0);
+  --card: #fff;
+  --muted: oklch(0.96 0 0);
+  --muted-fg: oklch(0.45 0 0);
+  --border: oklch(0.92 0 0);
+  --border-strong: oklch(0.82 0 0);
+  --primary: oklch(0.82 0.16 90);
+  --primary-fg: oklch(0.145 0 0);
+  --accent: oklch(0.82 0.16 90);
+  --accent-fg: oklch(0.145 0 0);
+  --ring: oklch(0.82 0.16 90);
+  --sidebar: #fff;
+  --sidebar-accent: oklch(0.96 0 0);
+  --grn: oklch(0.55 0.13 160);
+  --red: oklch(0.55 0.18 25);
+  --ora: oklch(0.55 0.13 70);
+  --shadow: 0 1px 3px rgb(0 0 0 / 0.06);
+  --shadow-lg: 0 12px 32px rgb(0 0 0 / 0.08);
+}
+
+/* ── escuro ───────────────────────────────────────────────────────────── */
+:root[data-theme='dark'] {
+  --bg: oklch(0.145 0 0);
+  --fg: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-fg: oklch(0.62 0 0);
+  --border: oklch(0.3 0 0);
+  --border-strong: oklch(0.45 0 0);
+  --primary: oklch(0.82 0.16 90);
+  --primary-fg: oklch(0.145 0 0);
+  --accent: oklch(0.82 0.16 90);
+  --accent-fg: oklch(0.145 0 0);
+  --ring: oklch(0.82 0.16 90);
+  --sidebar: oklch(0.145 0 0);
+  --sidebar-accent: oklch(0.24 0 0);
+  --grn: oklch(0.72 0.05 160);
+  --red: oklch(0.6 0.12 25);
+  --ora: oklch(0.65 0.06 70);
+  --shadow: 0 8px 28px rgb(0 0 0 / 0.5);
+  --shadow-lg: 0 18px 48px rgb(0 0 0 / 0.55);
+}
+
+/* ── mapeia tokens → utilitários Tailwind (bg-card, text-fg, etc.) ─────── */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-fg: var(--fg);
+  --color-card: var(--card);
+  --color-muted: var(--muted);
+  --color-muted-fg: var(--muted-fg);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-primary: var(--primary);
+  --color-primary-fg: var(--primary-fg);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-grn: var(--grn);
+  --color-red: var(--red);
+  --color-ora: var(--ora);
+
+  --font-sans: var(--font);
+  --font-serif: var(--serif);
+  --font-mono: var(--mono);
+}
+
+/* ── base ─────────────────────────────────────────────────────────────── */
+* {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  font-weight: 300;
+  background: var(--bg);
+  color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  line-height: 1.5;
+  transition:
+    background 0.25s,
+    color 0.25s;
+}
+
+/* números tabulares como padrão em stats */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+.font-serif-italic {
+  font-family: var(--serif);
+  font-style: italic;
+  font-weight: 400;
+}
+
+/* eyebrow / rótulo de seção reutilizável */
+.eyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--muted-fg);
+}
+
+/* scrollbar discreta */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+  border: 3px solid var(--bg);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* respeita quem prefere menos movimento */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+@keyframes fz-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+}
+
+@keyframes fz-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fz-live-dot {
+  animation: fz-pulse 1.8s ease-in-out infinite;
+}
+
+.fz-fade-in {
+  animation: fz-fade-in 0.35s ease both;
+}

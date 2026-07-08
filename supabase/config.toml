@@ -1,0 +1,13 @@
+# Configuração do projeto Supabase local. Ajuste `project_id` para o ref do seu
+# projeto ao rodar `supabase link`.
+project_id = "painel-financeiro-finalizei"
+
+[functions.ca-auth-start]
+verify_jwt = false
+
+[functions.ca-oauth-callback]
+verify_jwt = false
+
+[functions.ca-sync]
+# Protegida internamente por service_role key / SYNC_SECRET (ver o código).
+verify_jwt = false
