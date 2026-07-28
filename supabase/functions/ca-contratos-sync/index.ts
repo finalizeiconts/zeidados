@@ -39,6 +39,23 @@ function onlyDigits(v: string | null): string {
   return (v ?? '').replace(/\D/g, '')
 }
 
+/**
+ * Frequência do contrato no Conta Azul.
+ *
+ * O CA modela periodicidade como TIPO + INTERVALO: semestral não é um tipo
+ * próprio, é "MENSAL a cada 6". Mandar MENSAL sem intervalo era o defeito que
+ * cobraria um semestral de R$ 2.200 todo mês — descoberto na bancada de teste
+ * do ZeiClient (28/07/2026) antes de chegar aqui.
+ */
+function frequenciaDe(recorrencia: string | null | undefined) {
+  const r = (recorrencia ?? 'mensal').trim().toLowerCase()
+  if (r.startsWith('semestr'))  return { tipo_frequencia: 'MENSAL', intervalo_frequencia: 6,  rotulo: 'semestral' }
+  if (r.startsWith('trimestr')) return { tipo_frequencia: 'MENSAL', intervalo_frequencia: 3,  rotulo: 'trimestral' }
+  if (r.startsWith('bimestr'))  return { tipo_frequencia: 'MENSAL', intervalo_frequencia: 2,  rotulo: 'bimestral' }
+  if (r.startsWith('anual'))    return { tipo_frequencia: 'MENSAL', intervalo_frequencia: 12, rotulo: 'anual' }
+  return { tipo_frequencia: 'MENSAL', intervalo_frequencia: 1, rotulo: 'mensal' }
+}
+
 function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10)
 }
@@ -251,7 +268,9 @@ Deno.serve(async (req) => {
       if (!id) {
         const criado = await caFetch(accessToken, '/v1/servicos', {
           method: 'POST',
-          body: JSON.stringify({ descricao: nome, tipo: 'PRESTADO', valor_venda: 0 }),
+          // `status` é obrigatório (ATIVO | INATIVO) — sem ele o CA devolve 400 e o
+          // contrato inteiro morre antes de nascer.
+          body: JSON.stringify({ descricao: nome, tipo: 'PRESTADO', valor_venda: 0, status: 'ATIVO' }),
         })
         if (criado.status !== 200 && criado.status !== 201) {
           throw new Error(
@@ -280,15 +299,22 @@ Deno.serve(async (req) => {
 
       const dia = Number(c.dia_vencimento)
       const inicio = c.data_inicio_servicos ?? isoDate(new Date())
+      const freq = frequenciaDe(c.recorrencia_pagamento)
       const payload = {
         id_cliente: caPessoa,
         data_emissao: isoDate(new Date()),
         observacoes: `Contrato gerado pelo ZeiClient — cliente ${c.codigo ?? ''} ${c.nome}`,
         termos: {
-          tipo_frequencia: 'MENSAL',
+          tipo_frequencia: freq.tipo_frequencia,
+          intervalo_frequencia: freq.intervalo_frequencia,
           tipo_expiracao: 'NUNCA',
           data_inicio: inicio,
           data_fim: '2099-12-31',
+          // Emite a venda no dia 1º e vence no dia do contrato — o boleto
+          // nasce com prazo pro cliente, em vez de nascer no próprio dia do
+          // vencimento (regra combinada em 28/07/2026). Obrigatório: sem este
+          // campo o CA devolve 400.
+          dia_emissao_venda: 1,
           numero,
         },
         condicao_pagamento: {
@@ -300,7 +326,7 @@ Deno.serve(async (req) => {
           {
             id: idServico,
             quantidade: 1,
-            descricao: `${nomeServico} — mensal`,
+            descricao: `${nomeServico} — ${freq.rotulo}`,
             valor: Number(c.valor_honorarios),
           },
         ],
@@ -330,6 +356,11 @@ Deno.serve(async (req) => {
         dia_vencimento: dia,
         origem,
         status: 'ativo',
+        // Marca d'água NÃO-nula: null significa "contrato pré-existente" e faz
+        // o cron da ponte ADOTAR a primeira venda em vez de faturá-la. Em
+        // contrato novo, a primeira venda emitida JÁ deve virar boleto — o
+        // uuid zero diz "nada processado, fatura tudo que vier".
+        ultima_venda_processada: '00000000-0000-0000-0000-000000000000',
       })
       return { ok: true, nome: c.nome, contrato: contratoId, numero }
     }
