@@ -169,7 +169,7 @@ Deno.serve(async (req) => {
     const cfg = new Map((cfgRows ?? []).map((r) => [r.chave as string, r.valor as string]))
     const autoDesde = cfg.get('contratos_auto_desde') ?? isoDate(new Date())
 
-    // ── Candidatos: ativos, com CNPJ, honorários e dia, sem contrato ────────
+    // ── Candidatos: ativos, com CPF/CNPJ, honorários e dia, sem contrato ────
     const { data: clientesRaw, error: cliErr } = await supabasePublic
       .from('cs_clientes')
       .select('id, nome, codigo, cnpj_cpf, valor_honorarios, dia_vencimento, recorrencia_pagamento, data_inicio_servicos, plano_servicos, oportunidade_origem_id, created_at')
@@ -191,7 +191,10 @@ Deno.serve(async (req) => {
     const candidatos = (clientesRaw as Candidato[]).filter(
       (c) =>
         !comContrato.has(c.id) &&
-        onlyDigits(c.cnpj_cpf).length === 14 &&
+        // CPF (11) entra junto com CNPJ (14): parte da carteira é pessoa
+        // física — produtor rural etc. — com contrato de honorários igual.
+        // A ca-pessoas-sync já cria Pessoa Física no CA sem problema.
+        [11, 14].includes(onlyDigits(c.cnpj_cpf).length) &&
         Number(c.valor_honorarios) > 0 &&
         Number(c.dia_vencimento) >= 1 &&
         Number(c.dia_vencimento) <= 31,
