@@ -32,6 +32,8 @@ interface Candidato {
   data_inicio_servicos: string | null
   plano_servicos: string | null
   oportunidade_origem_id: string | null
+  proximo_faturamento: string | null
+  nao_faturar: boolean | null
   created_at: string
 }
 
@@ -66,6 +68,28 @@ function primeiraDataVencimento(dia: number, inicio: string | null): string {
   const d = new Date(base.getFullYear(), base.getMonth(), dia)
   if (d <= base) d.setMonth(d.getMonth() + 1)
   return isoDate(d)
+}
+
+/**
+ * Primeira cobrança respeitando o piso do cliente (proximo_faturamento).
+ *
+ * O piso é a memória da migração: o que vence antes dele JÁ FOI cobrado por
+ * fora (Asaas manual). Ignorá-lo tem dois estragos: mensal criado antes do
+ * dia de vencimento geraria a venda do mês já cobrado; e semestral/anual
+ * nasceria no mês errado e DESALINHARIA O CICLO PRA SEMPRE — um jun/dez
+ * criado em agosto viraria ago/fev, porque o CA repete a partir da primeira.
+ * Avança mês a mês (mantendo o dia) até cruzar o piso.
+ */
+function primeiraDataComPiso(dia: number, inicio: string | null, piso: string | null): string {
+  let data = primeiraDataVencimento(dia, inicio)
+  if (!piso) return data
+  let guarda = 0
+  while (data < piso && guarda < 24) {
+    const [y, m] = data.split('-').map(Number)
+    data = isoDate(new Date(y, m, dia)) // mês seguinte, mesmo dia
+    guarda++
+  }
+  return data
 }
 
 async function caFetch(
@@ -172,7 +196,7 @@ Deno.serve(async (req) => {
     // ── Candidatos: ativos, com CPF/CNPJ, honorários e dia, sem contrato ────
     const { data: clientesRaw, error: cliErr } = await supabasePublic
       .from('cs_clientes')
-      .select('id, nome, codigo, cnpj_cpf, valor_honorarios, dia_vencimento, recorrencia_pagamento, data_inicio_servicos, plano_servicos, oportunidade_origem_id, created_at')
+      .select('id, nome, codigo, cnpj_cpf, valor_honorarios, dia_vencimento, recorrencia_pagamento, data_inicio_servicos, plano_servicos, oportunidade_origem_id, proximo_faturamento, nao_faturar, created_at')
       .eq('status', 'ativo')
     if (cliErr) throw cliErr
 
@@ -195,21 +219,41 @@ Deno.serve(async (req) => {
         // física — produtor rural etc. — com contrato de honorários igual.
         // A ca-pessoas-sync já cria Pessoa Física no CA sem problema.
         [11, 14].includes(onlyDigits(c.cnpj_cpf).length) &&
+        // Cliente marcado "não faturar" não ganha contrato: geraria vendas no
+        // CA que ninguém vai cobrar — sujeira contábil garantida.
+        !c.nao_faturar &&
         Number(c.valor_honorarios) > 0 &&
         Number(c.dia_vencimento) >= 1 &&
         Number(c.dia_vencimento) <= 31,
     )
     const autoElegiveis = candidatos.filter((c) => c.created_at >= autoDesde)
 
+    // CNPJ/CPF repetido entre candidatos = cadastro duplicado no CRM. Criar
+    // contrato pros dois cobraria a MESMA empresa duas vezes. Nenhum dos dois
+    // é criado — resolve o cadastro primeiro.
+    const porDoc = new Map<string, number>()
+    for (const c of candidatos) {
+      const d = onlyDigits(c.cnpj_cpf)
+      porDoc.set(d, (porDoc.get(d) ?? 0) + 1)
+    }
+    const docsDuplicados = new Set([...porDoc.entries()].filter(([, n]) => n > 1).map(([d]) => d))
+
     if (acao === 'plano') {
-      const amostra = []
-      for (const c of candidatos.slice(0, 15)) {
-        amostra.push({
+      // Lista COMPLETA — é a revisão pré-migração; amostrar esconderia erro.
+      const lista = []
+      for (const c of candidatos) {
+        lista.push({
           nome: c.nome,
+          documento: onlyDigits(c.cnpj_cpf),
+          duplicado: docsDuplicados.has(onlyDigits(c.cnpj_cpf)),
           honorarios: c.valor_honorarios,
+          recorrencia: c.recorrencia_pagamento ?? 'mensal',
           dia: c.dia_vencimento,
+          piso: c.proximo_faturamento,
+          primeira_cobranca_prevista: primeiraDataComPiso(
+            Number(c.dia_vencimento), c.data_inicio_servicos, c.proximo_faturamento),
           servico: await servicoDoCliente(c),
-          auto: c.created_at >= autoDesde,
+          pessoa_sincronizada: pessoaDe.has(c.id),
         })
       }
       return json({
@@ -217,9 +261,9 @@ Deno.serve(async (req) => {
         auto_desde: autoDesde,
         candidatos_total: candidatos.length,
         auto_elegiveis: autoElegiveis.length,
-        somente_manuais: candidatos.length - autoElegiveis.length,
+        documentos_duplicados: [...docsDuplicados],
         sem_pessoa_sincronizada: candidatos.filter((c) => !pessoaDe.has(c.id)).length,
-        amostra,
+        lista,
       })
     }
 
@@ -300,6 +344,9 @@ Deno.serve(async (req) => {
         (prox.body as Record<string, unknown>)?.numero ?? prox.body ?? 0,
       )
 
+      if (docsDuplicados.has(onlyDigits(c.cnpj_cpf))) {
+        return { ok: false, nome: c.nome, erro: 'CPF/CNPJ duplicado no CRM — resolva o cadastro antes' }
+      }
       const dia = Number(c.dia_vencimento)
       const inicio = c.data_inicio_servicos ?? isoDate(new Date())
       const freq = frequenciaDe(c.recorrencia_pagamento)
@@ -323,7 +370,7 @@ Deno.serve(async (req) => {
         condicao_pagamento: {
           tipo_pagamento: 'BOLETO_BANCARIO',
           dia_vencimento: dia,
-          primeira_data_vencimento: primeiraDataVencimento(dia, inicio),
+          primeira_data_vencimento: primeiraDataComPiso(dia, inicio, c.proximo_faturamento),
         },
         itens: [
           {
@@ -375,6 +422,25 @@ Deno.serve(async (req) => {
       if (comContrato.has(c.id)) return json({ error: 'cliente já tem contrato' }, 409)
       const r = await criarContrato(c, 'manual')
       return json({ ok: r.ok, resultado: r }, r.ok ? 200 : 422)
+    }
+
+    // Migração da carteira: processa TODOS os candidatos, em lotes de 10 por
+    // chamada (rate limit do CA). Rode acao=plano antes e revise a lista —
+    // este aqui cria de verdade. Repita a chamada até restantes = 0.
+    if (acao === 'criar_lote') {
+      const lote = candidatos.slice(0, 10)
+      const resultados = []
+      for (const c of lote) {
+        resultados.push(await criarContrato(c, 'manual'))
+        await new Promise((r) => setTimeout(r, 300))
+      }
+      return json({
+        ok: true,
+        processados: resultados.length,
+        criados: resultados.filter((r) => r.ok).length,
+        falhas: resultados.filter((r) => !r.ok),
+        restantes: Math.max(0, candidatos.length - lote.length),
+      })
     }
 
     if (acao === 'auto') {
