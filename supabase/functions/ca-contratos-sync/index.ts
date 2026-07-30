@@ -11,16 +11,19 @@
 // Azul) não ganha contrato sozinho — para ela existe a ação manual "criar"
 // disparada pelo painel de integrações do ZeiClient.
 //
-// Regra do dia 1º: o Conta Azul emite a 1ª venda no ato da criação, datada do
-// dia da criação — então o contrato SÓ nasce no mês da própria 1ª cobrança
-// (criar_lote/auto filtram por isso; cron mensal do dia 1º faz as ondas de
-// dez/jan sozinho). Assim a data da venda cai sempre no mês do vencimento.
+// Regra da data da venda (fechada em 29/07/2026, teste real): o CA só emite a
+// 1ª venda no ato da criação quando o contrato nasce com data_inicio no
+// passado. Com data_inicio FUTURA ele não emite nada — as vendas nascem nas
+// gerações do dia 1º, cada uma datada do dia 1º do mês do próprio vencimento.
+// Então todo contrato é criado com data_inicio = 1º dia do mês da 1ª cobrança:
+// pode ser criado em qualquer dia, de qualquer mês, que a cadeia nasce
+// alinhada (venda 01/08 → venc 10/08, venda 01/09 → venc 10/09, …).
 //
 // Ações (query string ou corpo JSON):
 //   acao=plano                      → lista candidatos (não cria nada)
 //   acao=criar&cliente=<uuid>       → cria contrato para 1 cliente (manual)
-//   acao=criar_lote[&ignorar_mes=1] → 10 por chamada, só quem vence NESTE mês
-//   acao=auto                       → elegíveis do modo automático (mesmo gate)
+//   acao=criar_lote                 → 10 por chamada; repita até restantes=0
+//   acao=auto                       → cria para os elegíveis do modo automático
 //   acao=encerrar&cliente=<uuid>    → encerra o contrato no Conta Azul
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -66,12 +69,6 @@ function frequenciaDe(recorrencia: string | null | undefined) {
 
 function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10)
-}
-
-/** Hoje no fuso de Brasília — o gate do "dia 1º" é no calendário BR, e entre
- *  21h e meia-noite a data UTC já virou. */
-function hojeBRT(): string {
-  return new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10)
 }
 
 /** Próxima ocorrência do dia de vencimento a partir de hoje/início. */
@@ -250,21 +247,12 @@ Deno.serve(async (req) => {
     }
     const docsDuplicados = new Set([...porDoc.entries()].filter(([, n]) => n > 1).map(([d]) => d))
 
-    // ── Gate do dia 1º ──────────────────────────────────────────────────────
-    // O Conta Azul emite a 1ª venda NO ATO da criação, datada do dia da
-    // criação — e cada geração do dia 1º emite o ciclo seguinte. Contrato
-    // criado no meio do mês nasce com a cadeia toda deslocada (venda de
-    // setembro datada 01/08, etc.). A única forma da data da venda cair no mês
-    // do próprio vencimento é criar o contrato DENTRO do mês da 1ª cobrança —
-    // por isso só entram no lote os candidatos cujo primeiro vencimento cai no
-    // mês corrente. Semestrais/anuais esperam o mês deles (o cron mensal do
-    // dia 1º cuida). ignorar_mes=1 fura o gate — teste consciente, nada mais.
-    const ignorarMes = bodyParams.ignorar_mes === true || bodyParams.ignorar_mes === 1 ||
-      url.searchParams.get('ignorar_mes') === '1'
-    const mesAtual = hojeBRT().slice(0, 7)
     const primeiraDe = (c: Candidato) =>
       primeiraDataComPiso(Number(c.dia_vencimento), c.data_inicio_servicos, c.proximo_faturamento)
-    const noMes = (c: Candidato) => primeiraDe(c).slice(0, 7) === mesAtual
+    // data_inicio do contrato no CA: 1º dia do mês da 1ª cobrança. É o que
+    // impede a emissão imediata e alinha a data de cada venda ao mês do
+    // vencimento dela (ver cabeçalho).
+    const inicioDe = (c: Candidato) => `${primeiraDe(c).slice(0, 7)}-01`
 
     if (acao === 'plano') {
       // Lista COMPLETA — é a revisão pré-migração; amostrar esconderia erro.
@@ -279,7 +267,7 @@ Deno.serve(async (req) => {
           dia: c.dia_vencimento,
           piso: c.proximo_faturamento,
           primeira_cobranca_prevista: primeiraDe(c),
-          cria_no_mes: primeiraDe(c).slice(0, 7),
+          inicio_no_ca: inicioDe(c),
           servico: await servicoDoCliente(c),
           pessoa_sincronizada: pessoaDe.has(c.id),
         })
@@ -287,10 +275,7 @@ Deno.serve(async (req) => {
       return json({
         ok: true,
         auto_desde: autoDesde,
-        mes_atual: mesAtual,
         candidatos_total: candidatos.length,
-        elegiveis_neste_mes: candidatos.filter(noMes).length,
-        aguardando_mes_futuro: candidatos.filter((c) => !noMes(c)).length,
         auto_elegiveis: autoElegiveis.length,
         documentos_duplicados: [...docsDuplicados],
         sem_pessoa_sincronizada: candidatos.filter((c) => !pessoaDe.has(c.id)).length,
@@ -379,7 +364,11 @@ Deno.serve(async (req) => {
         return { ok: false, nome: c.nome, erro: 'CPF/CNPJ duplicado no CRM — resolva o cadastro antes' }
       }
       const dia = Number(c.dia_vencimento)
-      const inicio = c.data_inicio_servicos ?? isoDate(new Date())
+      // Início SEMPRE no 1º dia do mês da 1ª cobrança — nunca a data do
+      // cadastro. Início no passado faz o CA emitir a 1ª venda na hora, datada
+      // de hoje, e desalinhar a cadeia inteira (aprendido em 29/07/2026 com 10
+      // contratos revertidos).
+      const inicio = inicioDe(c)
       const freq = frequenciaDe(c.recorrencia_pagamento)
       const payload = {
         id_cliente: caPessoa,
@@ -459,8 +448,7 @@ Deno.serve(async (req) => {
     // chamada (rate limit do CA). Rode acao=plano antes e revise a lista —
     // este aqui cria de verdade. Repita a chamada até restantes = 0.
     if (acao === 'criar_lote') {
-      const elegiveis = ignorarMes ? candidatos : candidatos.filter(noMes)
-      const lote = elegiveis.slice(0, 10)
+      const lote = candidatos.slice(0, 10)
       const resultados = []
       for (const c of lote) {
         resultados.push(await criarContrato(c, 'manual'))
@@ -468,22 +456,20 @@ Deno.serve(async (req) => {
       }
       return json({
         ok: true,
-        mes_atual: mesAtual,
         processados: resultados.length,
         criados: resultados.filter((r) => r.ok).length,
         falhas: resultados.filter((r) => !r.ok),
-        restantes: Math.max(0, elegiveis.length - lote.length),
-        aguardando_mes_futuro: candidatos.length - elegiveis.length,
+        restantes: Math.max(0, candidatos.length - lote.length),
       })
     }
 
     if (acao === 'auto') {
       const resultados = []
-      for (const c of autoElegiveis.filter(noMes).slice(0, 20)) {
+      for (const c of autoElegiveis.slice(0, 20)) {
         resultados.push(await criarContrato(c, 'auto'))
         await new Promise((r) => setTimeout(r, 200))
       }
-      return json({ ok: true, mes_atual: mesAtual, processados: resultados.length, resultados })
+      return json({ ok: true, processados: resultados.length, resultados })
     }
 
     if (acao === 'encerrar') {
