@@ -62,7 +62,11 @@ function buildPessoa(c: CsCliente) {
   if (c.cidade || c.estado) {
     payload.enderecos = [
       {
-        logradouro: c.endereco ?? '',
+        // O CA rejeita logradouro > 100 caracteres (400: "O logradouro pode
+        // ter no máximo 100 caracteres" — caso real do CAIO, 30/07/2026).
+        // Truncar é melhor que derrubar o cadastro inteiro por causa de um
+        // complemento comprido; o endereço fiel continua no CRM.
+        logradouro: (c.endereco ?? '').slice(0, 100),
         cidade: c.cidade ?? '',
         estado: c.estado ?? '',
         pais: 'Brasil',
