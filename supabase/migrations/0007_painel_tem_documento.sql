@@ -2,8 +2,13 @@
 -- parte da carteira é pessoa física (produtor rural etc.) com contrato de
 -- honorários igual. tem_documento aceita CPF (11) ou CNPJ (14); tem_cnpj
 -- permanece por compatibilidade com o painel.
+--
+-- DROP + CREATE (não OR REPLACE): view só aceita coluna nova NO FINAL, e o
+-- OR REPLACE com coluna no meio falha com "cannot change name of view column".
 
-create or replace view contaazul.v_contratos_painel as
+drop view contaazul.v_contratos_painel;
+
+create view contaazul.v_contratos_painel as
 select
   c.id                                  as cs_cliente_id,
   c.nome,
@@ -14,14 +19,14 @@ select
   c.recorrencia_pagamento,
   c.data_inicio_servicos,
   length(regexp_replace(coalesce(c.cnpj_cpf, ''), '\D', '', 'g')) = 14 as tem_cnpj,
-  length(regexp_replace(coalesce(c.cnpj_cpf, ''), '\D', '', 'g')) in (11, 14) as tem_documento,
   (m.cs_cliente_id is not null)         as pessoa_sincronizada,
   k.ca_contrato_id,
   k.numero                              as contrato_numero,
   k.valor                               as contrato_valor,
   k.status                              as contrato_status,
   k.origem                              as contrato_origem,
-  k.criado_em                           as contrato_criado_em
+  k.criado_em                           as contrato_criado_em,
+  length(regexp_replace(coalesce(c.cnpj_cpf, ''), '\D', '', 'g')) in (11, 14) as tem_documento
 from public.cs_clientes c
 left join contaazul.ca_pessoa_map  m on m.cs_cliente_id = c.id
 left join contaazul.ca_contrato_map k on k.cs_cliente_id = c.id
