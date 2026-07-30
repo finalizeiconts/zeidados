@@ -39,6 +39,7 @@ interface Candidato {
   dia_vencimento: number | null
   recorrencia_pagamento: string | null
   data_inicio_servicos: string | null
+  data_primeiro_honorario: string | null
   plano_servicos: string | null
   oportunidade_origem_id: string | null
   proximo_faturamento: string | null
@@ -205,7 +206,7 @@ Deno.serve(async (req) => {
     // ── Candidatos: ativos, com CPF/CNPJ, honorários e dia, sem contrato ────
     const { data: clientesRaw, error: cliErr } = await supabasePublic
       .from('cs_clientes')
-      .select('id, nome, codigo, cnpj_cpf, valor_honorarios, dia_vencimento, recorrencia_pagamento, data_inicio_servicos, plano_servicos, oportunidade_origem_id, proximo_faturamento, nao_faturar, created_at')
+      .select('id, nome, codigo, cnpj_cpf, valor_honorarios, dia_vencimento, recorrencia_pagamento, data_inicio_servicos, data_primeiro_honorario, plano_servicos, oportunidade_origem_id, proximo_faturamento, nao_faturar, created_at')
       .eq('status', 'ativo')
     if (cliErr) throw cliErr
 
@@ -247,8 +248,20 @@ Deno.serve(async (req) => {
     }
     const docsDuplicados = new Set([...porDoc.entries()].filter(([, n]) => n > 1).map(([d]) => d))
 
-    const primeiraDe = (c: Candidato) =>
-      primeiraDataComPiso(Number(c.dia_vencimento), c.data_inicio_servicos, c.proximo_faturamento)
+    // 1ª cobrança do contrato. "Data 1º honorário" do cadastro é a fonte da
+    // verdade quando aponta pro FUTURO — é ela que o time define antes de
+    // mandar o contrato pro D4Sign, e é ela que o auto-start usa quando todo
+    // mundo assina. No passado (carteira migrada, campo histórico) não serve:
+    // cai no cálculo padrão dia de vencimento + piso.
+    const primeiraDe = (c: Candidato) => {
+      const manual = (c.data_primeiro_honorario ?? '').slice(0, 10)
+      if (manual && manual > isoDate(new Date())) return manual
+      return primeiraDataComPiso(Number(c.dia_vencimento), c.data_inicio_servicos, c.proximo_faturamento)
+    }
+    const primeiraManual = (c: Candidato) => {
+      const manual = (c.data_primeiro_honorario ?? '').slice(0, 10)
+      return Boolean(manual && manual > isoDate(new Date()))
+    }
     // data_inicio do contrato no CA: 1º dia do mês da 1ª cobrança. É o que
     // impede a emissão imediata e alinha a data de cada venda ao mês do
     // vencimento dela (ver cabeçalho).
@@ -267,6 +280,7 @@ Deno.serve(async (req) => {
           dia: c.dia_vencimento,
           piso: c.proximo_faturamento,
           primeira_cobranca_prevista: primeiraDe(c),
+          origem_primeira: primeiraManual(c) ? 'manual (Data 1º honorário)' : 'calculada (dia + piso)',
           inicio_no_ca: inicioDe(c),
           servico: await servicoDoCliente(c),
           pessoa_sincronizada: pessoaDe.has(c.id),
@@ -363,11 +377,13 @@ Deno.serve(async (req) => {
       if (docsDuplicados.has(onlyDigits(c.cnpj_cpf))) {
         return { ok: false, nome: c.nome, erro: 'CPF/CNPJ duplicado no CRM — resolva o cadastro antes' }
       }
-      const dia = Number(c.dia_vencimento)
-      // Início SEMPRE no 1º dia do mês da 1ª cobrança — nunca a data do
-      // cadastro. Início no passado faz o CA emitir a 1ª venda na hora, datada
-      // de hoje, e desalinhar a cadeia inteira (aprendido em 29/07/2026 com 10
-      // contratos revertidos).
+      // A 1ª cobrança (manual do cadastro ou calculada) manda em tudo: o CA
+      // exige dia_vencimento igual ao dia dela, e o início SEMPRE fica no 1º
+      // dia do mês dela — nunca a data do cadastro. Início no passado faz o CA
+      // emitir a 1ª venda na hora, datada de hoje, e desalinhar a cadeia
+      // inteira (aprendido em 29/07/2026 com 10 contratos revertidos).
+      const primeira = primeiraDe(c)
+      const dia = Number(primeira.slice(8, 10))
       const inicio = inicioDe(c)
       const freq = frequenciaDe(c.recorrencia_pagamento)
       const payload = {
@@ -390,7 +406,7 @@ Deno.serve(async (req) => {
         condicao_pagamento: {
           tipo_pagamento: 'BOLETO_BANCARIO',
           dia_vencimento: dia,
-          primeira_data_vencimento: primeiraDataComPiso(dia, inicio, c.proximo_faturamento),
+          primeira_data_vencimento: primeira,
         },
         itens: [
           {
