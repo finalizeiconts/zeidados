@@ -345,9 +345,9 @@ Deno.serve(async (req) => {
       if (!id) {
         const criado = await caFetch(accessToken, '/v1/servicos', {
           method: 'POST',
-          // `status` é obrigatório (ATIVO | INATIVO) — sem ele o CA devolve 400 e o
-          // contrato inteiro morre antes de nascer.
-          body: JSON.stringify({ descricao: nome, tipo: 'PRESTADO', valor_venda: 0, status: 'ATIVO' }),
+          // `status` é obrigatório (ATIVO | INATIVO) e o campo do tipo é
+          // `tipo_servico` (não `tipo`) — validado contra a API real em 31/07.
+          body: JSON.stringify({ descricao: nome, tipo_servico: 'PRESTADO', preco: 0, status: 'ATIVO' }),
         })
         if (criado.status !== 200 && criado.status !== 201) {
           throw new Error(
