@@ -322,6 +322,18 @@ Deno.serve(async (req) => {
       return 'Honorários Contábeis'
     }
 
+    // Categoria financeira do plano — a escolhida no Editar Tipo (Config CRM).
+    // Sem escolha, devolve null e o payload segue sem id_categoria.
+    async function categoriaDoTipo(nomeTipo: string): Promise<string | null> {
+      const { data } = await supabasePublic
+        .from('cs_crm_tipos_servico')
+        .select('ca_categoria_id')
+        .eq('nome', nomeTipo)
+        .maybeSingle()
+      const id = (data?.ca_categoria_id as string | null) ?? null
+      return id && id.trim() ? id : null
+    }
+
     // Garante o serviço homônimo no Conta Azul (cria uma única vez, mapeia).
     async function servicoCA(nome: string): Promise<string> {
       const { data: mapRow } = await supabase
@@ -368,6 +380,7 @@ Deno.serve(async (req) => {
       }
       const nomeServico = await servicoDoCliente(c)
       const idServico = await servicoCA(nomeServico)
+      const idCategoria = await categoriaDoTipo(nomeServico)
 
       const prox = await caFetch(accessToken, '/v1/contratos/proximo-numero')
       const numero = Number(
@@ -389,6 +402,10 @@ Deno.serve(async (req) => {
       const payload = {
         id_cliente: caPessoa,
         data_emissao: isoDate(new Date()),
+        // Sem id_categoria o CA carimba a categoria default da conta em todas
+        // as vendas do contrato (caso "Honorários MEI", 31/07). A categoria
+        // vem do Editar Tipo do plano na Config CRM.
+        ...(idCategoria ? { id_categoria: idCategoria } : {}),
         observacoes: `Contrato gerado pelo ZeiClient — cliente ${c.codigo ?? ''} ${c.nome}`,
         termos: {
           tipo_frequencia: freq.tipo_frequencia,
