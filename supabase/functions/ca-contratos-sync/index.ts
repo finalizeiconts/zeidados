@@ -21,17 +21,27 @@
 //
 // Ações (query string ou corpo JSON):
 //   acao=plano                      → lista candidatos (não cria nada)
-//   acao=criar&cliente=<uuid>       → cria contrato para 1 cliente (manual)
+//   acao=criar&contrato=<uuid>      → cria 1 contrato (cliente=<uuid> mira o principal)
 //   acao=criar_lote                 → 10 por chamada; repita até restantes=0
 //   acao=auto                       → cria para os elegíveis do modo automático
-//   acao=encerrar&cliente=<uuid>    → encerra o contrato no Conta Azul
+//   acao=encerrar&contrato=<uuid>   → encerra o contrato no Conta Azul
+//
+// A fila é de CONTRATOS (cs_contratos), não de clientes: um cliente pode ter
+// dois serviços faturados em títulos separados.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { CA_API_BASE, refreshToken } from '../_shared/contaAzul.ts'
 import { corsHeaders, json } from '../_shared/cors.ts'
 
 interface Candidato {
+  /** Id do CLIENTE. Contrato adicional carrega o mesmo id do dono. */
   id: string
+  /** Preenchido só em contrato adicional (cs_contratos.id). */
+  contrato_id?: string | null
+  /** Nome do contrato, pra distinguir os do mesmo cliente na tela e no log. */
+  contrato_descricao?: string | null
+  /** Contrato principal do cliente (o que espelha em cs_clientes). */
+  contrato_principal?: boolean
   nome: string
   codigo: string | null
   cnpj_cpf: string | null
@@ -171,6 +181,7 @@ Deno.serve(async (req) => {
   }
   const acao = String(bodyParams.acao ?? url.searchParams.get('acao') ?? 'plano')
   const clienteId = String(bodyParams.cliente ?? url.searchParams.get('cliente') ?? '')
+  const contratoAlvo = String(bodyParams.contrato ?? url.searchParams.get('contrato') ?? '')
 
   try {
     // ── Token válido ────────────────────────────────────────────────────────
@@ -203,17 +214,33 @@ Deno.serve(async (req) => {
     const cfg = new Map((cfgRows ?? []).map((r) => [r.chave as string, r.valor as string]))
     const autoDesde = cfg.get('contratos_auto_desde') ?? isoDate(new Date())
 
-    // ── Candidatos: ativos, com CPF/CNPJ, honorários e dia, sem contrato ────
+    // ── Candidatos: contratos ativos ainda sem par no Conta Azul ────────────
+    //
+    // A fila é de CONTRATOS, não de clientes: um cliente pode ter dois
+    // serviços faturados em títulos separados. cs_contratos é a fonte de
+    // verdade (o principal nasceu do próprio cadastro do cliente no backfill),
+    // e cada contrato carrega os dados do dono pra montar o payload do CA.
+    const { data: contratosRaw, error: ctErr } = await supabasePublic
+      .from('cs_contratos')
+      .select('id, cliente_id, principal, descricao, plano_servicos, valor_honorarios, dia_vencimento, recorrencia_pagamento, data_inicio_servicos, data_primeiro_honorario, proximo_faturamento, nao_faturar, created_at')
+      .eq('status', 'ativo')
+    if (ctErr) throw ctErr
+
     const { data: clientesRaw, error: cliErr } = await supabasePublic
       .from('cs_clientes')
-      .select('id, nome, codigo, cnpj_cpf, valor_honorarios, dia_vencimento, recorrencia_pagamento, data_inicio_servicos, data_primeiro_honorario, plano_servicos, oportunidade_origem_id, proximo_faturamento, nao_faturar, created_at')
+      .select('id, nome, codigo, cnpj_cpf, oportunidade_origem_id, status')
       .eq('status', 'ativo')
     if (cliErr) throw cliErr
+    const dono = new Map<string, Record<string, unknown>>(
+      ((clientesRaw ?? []) as Record<string, unknown>[]).map((c) => [String(c.id), c]),
+    )
 
-    const { data: contratos } = await supabase
+    const { data: jaMapeados } = await supabase
       .from('ca_contrato_map')
-      .select('cs_cliente_id')
-    const comContrato = new Set((contratos ?? []).map((r) => r.cs_cliente_id))
+      .select('cs_contrato_id')
+    const comContrato = new Set(
+      (jaMapeados ?? []).map((r) => r.cs_contrato_id).filter(Boolean),
+    )
 
     const { data: pessoas } = await supabase
       .from('ca_pessoa_map')
@@ -222,31 +249,59 @@ Deno.serve(async (req) => {
       (pessoas ?? []).map((r) => [r.cs_cliente_id as string, r.ca_pessoa_id as string]),
     )
 
-    const candidatos = (clientesRaw as Candidato[]).filter(
-      (c) =>
-        !comContrato.has(c.id) &&
+    const candidatos: Candidato[] = ((contratosRaw ?? []) as Record<string, unknown>[])
+      .filter((ct) => !comContrato.has(ct.id as string))
+      .map((ct) => {
+        const cli = dono.get(ct.cliente_id as string)
+        if (!cli) return null // cliente inativo ou fora do escritório
+        return {
+          id: String(cli.id),
+          contrato_id: String(ct.id),
+          contrato_principal: Boolean(ct.principal),
+          contrato_descricao: (ct.descricao as string | null) ?? null,
+          nome: String(cli.nome),
+          codigo: (cli.codigo as string | null) ?? null,
+          cnpj_cpf: (cli.cnpj_cpf as string | null) ?? null,
+          oportunidade_origem_id: (cli.oportunidade_origem_id as string | null) ?? null,
+          plano_servicos: (ct.plano_servicos as string | null) ?? null,
+          valor_honorarios: ct.valor_honorarios as number | null,
+          dia_vencimento: ct.dia_vencimento as number | null,
+          recorrencia_pagamento: (ct.recorrencia_pagamento as string | null) ?? null,
+          data_inicio_servicos: (ct.data_inicio_servicos as string | null) ?? null,
+          data_primeiro_honorario: (ct.data_primeiro_honorario as string | null) ?? null,
+          proximo_faturamento: (ct.proximo_faturamento as string | null) ?? null,
+          nao_faturar: (ct.nao_faturar as boolean | null) ?? false,
+          created_at: String(ct.created_at),
+        } as Candidato
+      })
+      .filter((c): c is Candidato => c !== null)
+      .filter((c) =>
         // CPF (11) entra junto com CNPJ (14): parte da carteira é pessoa
         // física — produtor rural etc. — com contrato de honorários igual.
-        // A ca-pessoas-sync já cria Pessoa Física no CA sem problema.
         [11, 14].includes(onlyDigits(c.cnpj_cpf).length) &&
-        // Cliente marcado "não faturar" não ganha contrato: geraria vendas no
-        // CA que ninguém vai cobrar — sujeira contábil garantida.
+        // Contrato marcado "não faturar" não vai pro CA: geraria vendas que
+        // ninguém vai cobrar — sujeira contábil garantida.
         !c.nao_faturar &&
         Number(c.valor_honorarios) > 0 &&
         Number(c.dia_vencimento) >= 1 &&
-        Number(c.dia_vencimento) <= 31,
-    )
+        Number(c.dia_vencimento) <= 31)
+
     const autoElegiveis = candidatos.filter((c) => c.created_at >= autoDesde)
 
     // CNPJ/CPF repetido entre candidatos = cadastro duplicado no CRM. Criar
     // contrato pros dois cobraria a MESMA empresa duas vezes. Nenhum dos dois
     // é criado — resolve o cadastro primeiro.
-    const porDoc = new Map<string, number>()
+    // Conta CLIENTES distintos por documento, não contratos: dois contratos do
+    // mesmo cliente compartilham o CNPJ de propósito e não são duplicidade.
+    const clientesPorDoc = new Map<string, Set<string>>()
     for (const c of candidatos) {
       const d = onlyDigits(c.cnpj_cpf)
-      porDoc.set(d, (porDoc.get(d) ?? 0) + 1)
+      if (!clientesPorDoc.has(d)) clientesPorDoc.set(d, new Set())
+      clientesPorDoc.get(d)!.add(c.id)
     }
-    const docsDuplicados = new Set([...porDoc.entries()].filter(([, n]) => n > 1).map(([d]) => d))
+    const docsDuplicados = new Set(
+      [...clientesPorDoc.entries()].filter(([, ids]) => ids.size > 1).map(([d]) => d),
+    )
 
     // 1ª cobrança do contrato. "Data 1º honorário" do cadastro é a fonte da
     // verdade quando aponta pro FUTURO — é ela que o time define antes de
@@ -282,6 +337,8 @@ Deno.serve(async (req) => {
           primeira_cobranca_prevista: primeiraDe(c),
           origem_primeira: primeiraManual(c) ? 'manual (Data 1º honorário)' : 'calculada (dia + piso)',
           inicio_no_ca: inicioDe(c),
+          contrato_id: c.contrato_id,
+          contrato: c.contrato_descricao ?? (c.contrato_principal ? 'principal' : 'adicional'),
           servico: await servicoDoCliente(c),
           // Categoria visível ANTES de criar: foi por não conseguir enxergar
           // isso que a carteira inteira nasceu em "Honorarios MEI".
@@ -498,6 +555,7 @@ Deno.serve(async (req) => {
       )
       await supabase.from('ca_contrato_map').upsert({
         cs_cliente_id: c.id,
+        cs_contrato_id: c.contrato_id ?? null,
         ca_contrato_id: contratoId,
         numero,
         valor: Number(c.valor_honorarios),
@@ -514,10 +572,20 @@ Deno.serve(async (req) => {
     }
 
     if (acao === 'criar') {
-      if (!clienteId) return json({ error: 'informe cliente=<uuid>' }, 400)
-      const c = (clientesRaw as Candidato[]).find((x) => x.id === clienteId)
-      if (!c) return json({ error: 'cliente ativo não encontrado' }, 404)
-      if (comContrato.has(c.id)) return json({ error: 'cliente já tem contrato' }, 409)
+      // `contrato=` mira um contrato específico; `cliente=` continua valendo e
+      // resolve pro principal — é como o painel chama desde antes de existir
+      // mais de um contrato por cliente.
+      const c = contratoAlvo
+        ? candidatos.find((x) => x.contrato_id === contratoAlvo)
+        : candidatos.find((x) => x.id === clienteId && x.contrato_principal)
+      if (!contratoAlvo && !clienteId) return json({ error: 'informe contrato=<uuid> ou cliente=<uuid>' }, 400)
+      if (!c) {
+        return json({
+          error: contratoAlvo
+            ? 'contrato não encontrado entre os candidatos (já existe no CA, inativo, ou sem valor/dia)'
+            : 'cliente sem contrato principal elegível (já existe no CA, inativo, ou sem valor/dia)',
+        }, 404)
+      }
       const r = await criarContrato(c, 'manual')
       return json({ ok: r.ok, resultado: r }, r.ok ? 200 : 422)
     }
@@ -551,13 +619,23 @@ Deno.serve(async (req) => {
     }
 
     if (acao === 'encerrar') {
-      if (!clienteId) return json({ error: 'informe cliente=<uuid>' }, 400)
-      const { data: row } = await supabase
-        .from('ca_contrato_map')
-        .select('*')
-        .eq('cs_cliente_id', clienteId)
-        .single()
-      if (!row) return json({ error: 'contrato não encontrado' }, 404)
+      if (!contratoAlvo && !clienteId) {
+        return json({ error: 'informe contrato=<uuid> ou cliente=<uuid>' }, 400)
+      }
+      // Por cliente só encerra quando ele tem UM contrato: com dois, encerrar
+      // "o do cliente" seria adivinhar qual — melhor exigir o id.
+      const q = supabase.from('ca_contrato_map').select('*').eq('status', 'ativo')
+      const { data: rows } = contratoAlvo
+        ? await q.eq('cs_contrato_id', contratoAlvo)
+        : await q.eq('cs_cliente_id', clienteId)
+      if (!rows || rows.length === 0) return json({ error: 'contrato não encontrado' }, 404)
+      if (rows.length > 1) {
+        return json({
+          error: 'este cliente tem mais de um contrato — informe contrato=<uuid>',
+          contratos: rows.map((r) => ({ cs_contrato_id: r.cs_contrato_id, numero: r.numero, valor: r.valor })),
+        }, 409)
+      }
+      const row = rows[0]
       const res = await caFetch(
         accessToken,
         `/v1/contratos/${row.ca_contrato_id}/encerrar`,
@@ -567,8 +645,8 @@ Deno.serve(async (req) => {
         await supabase
           .from('ca_contrato_map')
           .update({ status: 'encerrado' })
-          .eq('cs_cliente_id', clienteId)
-        return json({ ok: true })
+          .eq('ca_contrato_id', row.ca_contrato_id)
+        return json({ ok: true, contrato: row.ca_contrato_id, numero: row.numero })
       }
       return json({ ok: false, erro: res.status, detalhe: res.body }, 422)
     }
