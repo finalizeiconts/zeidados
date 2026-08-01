@@ -283,6 +283,9 @@ Deno.serve(async (req) => {
           origem_primeira: primeiraManual(c) ? 'manual (Data 1º honorário)' : 'calculada (dia + piso)',
           inicio_no_ca: inicioDe(c),
           servico: await servicoDoCliente(c),
+          // Categoria visível ANTES de criar: foi por não conseguir enxergar
+          // isso que a carteira inteira nasceu em "Honorarios MEI".
+          categoria: await categoriaDoTipo(await servicoDoCliente(c)),
           pessoa_sincronizada: pessoaDe.has(c.id),
         })
       }
@@ -322,16 +325,50 @@ Deno.serve(async (req) => {
       return 'Honorários Contábeis'
     }
 
-    // Categoria financeira do plano — a escolhida no Editar Tipo (Config CRM).
-    // Sem escolha, devolve null e o payload segue sem id_categoria.
-    async function categoriaDoTipo(nomeTipo: string): Promise<string | null> {
-      const { data } = await supabasePublic
-        .from('cs_crm_tipos_servico')
-        .select('ca_categoria_id')
-        .eq('nome', nomeTipo)
-        .maybeSingle()
-      const id = (data?.ca_categoria_id as string | null) ?? null
-      return id && id.trim() ? id : null
+    /**
+     * Categoria financeira do contrato.
+     *
+     * Casar por nome exato falhava calado (01/08/2026): `plano_servicos` é
+     * texto livre no cadastro do cliente e não precisa bater com o nome do
+     * tipo de serviço — um acento ou um "(Prestadores)" a mais já quebra. E o
+     * fallback 'Honorários Contábeis' nem existe como tipo. Sem categoria o
+     * payload omitia o campo e o CA carimbava o default dele ("Honorarios
+     * MEI") em toda a carteira.
+     *
+     * Cascata: nome exato → nome sem diferenciar caixa/espaços → De→Para de
+     * categorias (ca_categoria_map) → padrão do escritório. `limit(1)` no
+     * lugar de maybeSingle porque dois tipos homônimos faziam a consulta
+     * devolver erro, não linha.
+     */
+    async function categoriaDoTipo(nomeTipo: string): Promise<
+      { id: string | null; origem: string }
+    > {
+      const limpo = nomeTipo.trim()
+
+      const { data: exato } = await supabasePublic
+        .from('cs_crm_tipos_servico').select('ca_categoria_id')
+        .eq('nome', limpo).not('ca_categoria_id', 'is', null).limit(1)
+      if (exato?.[0]?.ca_categoria_id) {
+        return { id: String(exato[0].ca_categoria_id), origem: 'tipo de serviço (nome exato)' }
+      }
+
+      const { data: aprox } = await supabasePublic
+        .from('cs_crm_tipos_servico').select('ca_categoria_id')
+        .ilike('nome', limpo).not('ca_categoria_id', 'is', null).limit(1)
+      if (aprox?.[0]?.ca_categoria_id) {
+        return { id: String(aprox[0].ca_categoria_id), origem: 'tipo de serviço (nome aproximado)' }
+      }
+
+      const { data: mapa } = await supabase
+        .from('ca_categoria_map').select('ca_categoria_id')
+        .ilike('nome', limpo).limit(1)
+      if (mapa?.[0]?.ca_categoria_id) {
+        return { id: String(mapa[0].ca_categoria_id), origem: 'De→Para de categorias' }
+      }
+
+      const padrao = Deno.env.get('CA_CATEGORIA_PADRAO_ID')
+        ?? 'bd66dc95-4551-4be6-be46-300e960d4e45' // Honorarios Contabeis
+      return { id: padrao, origem: 'padrão do escritório' }
     }
 
     // Garante o serviço homônimo no Conta Azul (cria uma única vez, mapeia).
@@ -380,7 +417,8 @@ Deno.serve(async (req) => {
       }
       const nomeServico = await servicoDoCliente(c)
       const idServico = await servicoCA(nomeServico)
-      const idCategoria = await categoriaDoTipo(nomeServico)
+      const cat = await categoriaDoTipo(nomeServico)
+      const idCategoria = cat.id
 
       const prox = await caFetch(accessToken, '/v1/contratos/proximo-numero')
       const numero = Number(
