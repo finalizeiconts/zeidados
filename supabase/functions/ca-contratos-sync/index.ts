@@ -424,6 +424,13 @@ Deno.serve(async (req) => {
           tipo_pagamento: 'BOLETO_BANCARIO',
           dia_vencimento: dia,
           primeira_data_vencimento: primeira,
+          // Sem a conta de recebimento o título nasce órfão e some das
+          // projeções por conta do CA (o realizado fica certo, porque a baixa
+          // informa a conta; o previsto, não). Os 168 migrados nasceram sem —
+          // e a API não tem endpoint de edição de contrato, então lá a
+          // correção é pela tela. Daqui pra frente, nasce certo.
+          id_conta_financeira: Deno.env.get('CA_CONTA_ASAAS_ID')
+            ?? '144f4ec8-e379-48a1-a4cb-733af36da866',
         },
         itens: [
           {
