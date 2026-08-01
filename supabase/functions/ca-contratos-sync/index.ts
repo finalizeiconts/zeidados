@@ -424,13 +424,13 @@ Deno.serve(async (req) => {
           tipo_pagamento: 'BOLETO_BANCARIO',
           dia_vencimento: dia,
           primeira_data_vencimento: primeira,
-          // CONTA DE RECEBIMENTO NÃO ENTRA AQUI. Testado em 01/08/2026 nos
-          // três formatos plausíveis (id_conta_financeira na raiz, dentro da
-          // condição de pagamento, e conta_financeira:{id}) — o CA aceita o
-          // payload e ignora todos. Também não há endpoint de edição de
-          // contrato (PUT/PATCH devolvem 404). É campo exclusivo da tela do
-          // CA, e sem ele o título fica fora das projeções por conta. Nada a
-          // fazer por código até a Conta Azul expor isso na API.
+          // Conta de recebimento — formato confirmado na doc oficial do
+          // criarcontrato. Os "testes" de 01/08 que sugeriam campo ignorado
+          // rodaram por engano na bancada (ca-teste-contrato), que não tinha o
+          // campo; esta função nunca tinha sido exercitada. Sem a conta o
+          // título fica fora das projeções por conta do CA.
+          id_conta_financeira: Deno.env.get('CA_CONTA_ASAAS_ID')
+            ?? '144f4ec8-e379-48a1-a4cb-733af36da866',
         },
         itens: [
           {
