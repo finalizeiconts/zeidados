@@ -399,6 +399,8 @@ Deno.serve(async (req) => {
       const dia = Number(primeira.slice(8, 10))
       const inicio = inicioDe(c)
       const freq = frequenciaDe(c.recorrencia_pagamento)
+      const contaAsaas = Deno.env.get('CA_CONTA_ASAAS_ID')
+        ?? '144f4ec8-e379-48a1-a4cb-733af36da866'
       const payload = {
         id_cliente: caPessoa,
         data_emissao: isoDate(new Date()),
@@ -406,6 +408,11 @@ Deno.serve(async (req) => {
         // as vendas do contrato (caso "Honorários MEI", 31/07). A categoria
         // vem do Editar Tipo do plano na Config CRM.
         ...(idCategoria ? { id_categoria: idCategoria } : {}),
+        // A conta de recebimento não pegou dentro de condicao_pagamento (o CA
+        // aceitou o payload e ignorou o campo, 01/08/2026). Tentativa no nível
+        // raiz: campo desconhecido é descartado em silêncio, então mandar nos
+        // dois lugares não quebra nada e cobre as duas hipóteses de nome.
+        id_conta_financeira: contaAsaas,
         observacoes: `Contrato gerado pelo ZeiClient — cliente ${c.codigo ?? ''} ${c.nome}`,
         termos: {
           tipo_frequencia: freq.tipo_frequencia,
@@ -429,8 +436,8 @@ Deno.serve(async (req) => {
           // informa a conta; o previsto, não). Os 168 migrados nasceram sem —
           // e a API não tem endpoint de edição de contrato, então lá a
           // correção é pela tela. Daqui pra frente, nasce certo.
-          id_conta_financeira: Deno.env.get('CA_CONTA_ASAAS_ID')
-            ?? '144f4ec8-e379-48a1-a4cb-733af36da866',
+          id_conta_financeira: contaAsaas,
+          conta_financeira: { id: contaAsaas },
         },
         itens: [
           {
