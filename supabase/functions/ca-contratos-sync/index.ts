@@ -226,10 +226,14 @@ Deno.serve(async (req) => {
       .eq('status', 'ativo')
     if (ctErr) throw ctErr
 
+    // Onboarding entra junto: cliente em implantação já paga honorário desde o
+    // primeiro mês. Quem decide se fatura é o contrato (nao_faturar + piso),
+    // não a fase do relacionamento — prender a cobrança ao status fazia o
+    // contrato nunca chegar ao CA e ninguém perceber até a cobrança não sair.
     const { data: clientesRaw, error: cliErr } = await supabasePublic
       .from('cs_clientes')
       .select('id, nome, codigo, cnpj_cpf, oportunidade_origem_id, status')
-      .eq('status', 'ativo')
+      .in('status', ['ativo', 'onboarding'])
     if (cliErr) throw cliErr
     const dono = new Map<string, Record<string, unknown>>(
       ((clientesRaw ?? []) as Record<string, unknown>[]).map((c) => [String(c.id), c]),
